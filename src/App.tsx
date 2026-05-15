@@ -20,8 +20,8 @@ export default function App() {
     audioStreamerRef.current = new AudioStreamer();
     
     // In this environment, GEMINI_API_KEY is available via process.env
-    //const apiKey = process.env.GEMINI_API_KEY || '';
-    const apiKey = import.meta.env.VITE_GEMINI_API_KEY || '';
+    const apiKey = process.env.GEMINI_API_KEY || '';
+    //const apiKey = import.meta.env.VITE_GEMINI_API_KEY || '';
     
     sessionRef.current = new LiveSession(
       apiKey,
