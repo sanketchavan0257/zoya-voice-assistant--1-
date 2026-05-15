@@ -15,6 +15,7 @@ export class LiveSession {
   private state: SessionState = SessionState.DISCONNECTED;
   private onStateChange: (state: SessionState) => void;
   private audioStreamer: AudioStreamer;
+  private micStream: MediaStream | null = null;
 
   constructor(
     apiKey: string,
@@ -31,14 +32,32 @@ export class LiveSession {
     this.onStateChange(state);
   }
 
+  // Call this BEFORE connect() - while still in user gesture context
+  async requestMicPermission(): Promise<MediaStream> {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    this.micStream = stream;
+    return stream;
+  }
+
   async connect() {
     if (this.session) return;
 
     this.setState(SessionState.CONNECTING);
 
+    // Request mic permission first (in user gesture context)
+    try {
+      if (!this.micStream) {
+        this.micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      }
+    } catch (error: any) {
+      console.error("Mic permission error:", error);
+      this.setState(SessionState.DISCONNECTED);
+      throw new Error("Microphone access denied. Please allow mic access.");
+    }
+
     try {
       const config = {
-        model: "gemini-3.1-flash-live-preview",
+        model: "gemini-2.0-flash-live-001",
         config: {
           responseModalities: [Modality.AUDIO],
           speechConfig: {
@@ -114,39 +133,31 @@ export class LiveSession {
             audio: { data: base64, mimeType: "audio/pcm;rate=16000" },
           });
         }
-      });
+      }, this.micStream || undefined);
       this.setState(SessionState.LISTENING);
     } catch (error) {
       console.error("Mic start error:", error);
+      this.disconnect();
     }
   }
 
   private async handleMessage(message: LiveServerMessage) {
-    // Handle Audio Output
     const base64Audio = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
     if (base64Audio) {
       this.setState(SessionState.SPEAKING);
       await this.audioStreamer.play(base64Audio);
     }
 
-    // Handle Model Turn End
-    if (message.serverContent?.modelTurn?.parts?.some(p => p.text)) {
-        // Technically we are audio only, but if text comes through we might update state
-    }
-
-    // Handle Interruption
     if (message.serverContent?.interrupted) {
       console.log("Interrupted");
       this.audioStreamer.stopPlayback();
       this.setState(SessionState.LISTENING);
     }
 
-    // Handle End of turn (listening again)
     if (message.serverContent?.turnComplete) {
        this.setState(SessionState.LISTENING);
     }
 
-    // Handle Tool Calls
     const toolCalls = message.toolCall?.functionCalls;
     if (toolCalls) {
       for (const call of toolCalls) {
@@ -171,6 +182,8 @@ export class LiveSession {
   async disconnect() {
     this.session?.close();
     this.session = null;
+    this.micStream?.getTracks().forEach(t => t.stop());
+    this.micStream = null;
     this.audioStreamer.stopMic();
     this.audioStreamer.stopPlayback();
     this.setState(SessionState.DISCONNECTED);
