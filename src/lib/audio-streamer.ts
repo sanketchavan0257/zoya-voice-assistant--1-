@@ -1,7 +1,3 @@
-/**
- * AudioStreamer handles microphone input and audio playback for real-time interactions.
- * It manages context at specific sample rates for mic (16kHz) and speaker (24kHz).
- */
 export class AudioStreamer {
   private audioContext: AudioContext | null = null;
   private processor: ScriptProcessorNode | null = null;
@@ -15,22 +11,20 @@ export class AudioStreamer {
     private speakerSampleRate = 24000
   ) {}
 
-  async startMic(onAudioData: (base64Data: string) => void) {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      throw new Error("Your browser does not support microphone access.");
-    }
-
+  async startMic(onAudioData: (base64Data: string) => void, existingStream?: MediaStream) {
     try {
-      this.audioContext = new AudioContext({ sampleRate: this.micSampleRate });
-      this.micStream = await navigator.mediaDevices.getUserMedia({ 
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true
-        } 
-      });
+      this.audioContext = new AudioContext();
+      const nativeSampleRate = this.audioContext.sampleRate;
+      console.log("Native sample rate:", nativeSampleRate);
+
+      // Use existing stream if provided, otherwise request new one
+      if (existingStream) {
+        this.micStream = existingStream;
+      } else {
+        this.micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      }
+
       this.source = this.audioContext.createMediaStreamSource(this.micStream);
-      
       this.processor = this.audioContext.createScriptProcessor(4096, 1, 1);
       
       this.source.connect(this.processor);
@@ -38,12 +32,15 @@ export class AudioStreamer {
 
       this.processor.onaudioprocess = (e) => {
         const inputData = e.inputBuffer.getChannelData(0);
-        const pcm16 = this.float32ToInt16(inputData);
+        const resampled = this.resample(inputData, nativeSampleRate, this.micSampleRate);
+        const pcm16 = this.float32ToInt16(resampled);
         const base64 = this.arrayBufferToBase64(pcm16.buffer);
         onAudioData(base64);
       };
+
     } catch (error: any) {
       this.stopMic();
+      console.error("Mic error:", error.name, error.message);
       if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
         throw new Error("No microphone found. Please plug in a mic or check your settings.");
       } else if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
@@ -52,6 +49,22 @@ export class AudioStreamer {
         throw new Error(`Mic initialization failed: ${error.message}`);
       }
     }
+  }
+
+  private resample(input: Float32Array, fromRate: number, toRate: number): Float32Array {
+    if (fromRate === toRate) return input;
+    const ratio = fromRate / toRate;
+    const outputLength = Math.round(input.length / ratio);
+    const output = new Float32Array(outputLength);
+    for (let i = 0; i < outputLength; i++) {
+      const pos = i * ratio;
+      const index = Math.floor(pos);
+      const frac = pos - index;
+      const a = input[index] || 0;
+      const b = input[index + 1] || 0;
+      output[i] = a + frac * (b - a);
+    }
+    return output;
   }
 
   stopMic() {
@@ -100,25 +113,20 @@ export class AudioStreamer {
     const source = this.audioContext.createBufferSource();
     source.buffer = buffer;
     source.connect(this.audioContext.destination);
-    
-    source.onended = () => {
-      this.processQueue();
-    };
-    
+    source.onended = () => this.processQueue();
     source.start();
   }
 
   stopPlayback() {
     this.playbackQueue = [];
     this.isPlaying = false;
-    // To fully stop immediately, we would need to track active BufferSource nodes
   }
 
   private float32ToInt16(float32Array: Float32Array): Int16Array {
     const int16Array = new Int16Array(float32Array.length);
     for (let i = 0; i < float32Array.length; i++) {
-        const s = Math.max(-1, Math.min(1, float32Array[i]));
-        int16Array[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      const s = Math.max(-1, Math.min(1, float32Array[i]));
+      int16Array[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
     }
     return int16Array;
   }
@@ -126,7 +134,7 @@ export class AudioStreamer {
   private int16ToFloat32(int16Array: Int16Array): Float32Array {
     const float32Array = new Float32Array(int16Array.length);
     for (let i = 0; i < int16Array.length; i++) {
-        float32Array[i] = int16Array[i] / 0x8000;
+      float32Array[i] = int16Array[i] / 0x8000;
     }
     return float32Array;
   }
@@ -134,9 +142,8 @@ export class AudioStreamer {
   private arrayBufferToBase64(buffer: ArrayBuffer): string {
     let binary = '';
     const bytes = new Uint8Array(buffer);
-    const len = bytes.byteLength;
-    for (let i = 0; i < len; i++) {
-        binary += String.fromCharCode(bytes[i]);
+    for (let i = 0; i < bytes.byteLength; i++) {
+      binary += String.fromCharCode(bytes[i]);
     }
     return window.btoa(binary);
   }
