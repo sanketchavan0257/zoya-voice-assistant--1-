@@ -1,0 +1,6 @@
+{
+  "name": "Zoya AI Assistant",
+  "description": "Real-time, voice-to-voice sassy AI assistant with a flirty personality and browser integration.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": []
+}
