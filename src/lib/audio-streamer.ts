@@ -21,17 +21,14 @@ export class AudioStreamer {
     }
 
     try {
-      // First request permission explicitly
-      const permissionStatus = await navigator.permissions.query({ name: 'microphone' as PermissionName });
-      console.log("Mic permission:", permissionStatus.state);
-
-      this.audioContext = new AudioContext();
+      this.audioContext = new AudioContext({ sampleRate: this.micSampleRate });
       this.micStream = await navigator.mediaDevices.getUserMedia({ 
-        audio: true
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        } 
       });
-      
-      // Resample if needed
-      const sourceSampleRate = this.audioContext.sampleRate;
       this.source = this.audioContext.createMediaStreamSource(this.micStream);
       
       this.processor = this.audioContext.createScriptProcessor(4096, 1, 1);
@@ -41,15 +38,12 @@ export class AudioStreamer {
 
       this.processor.onaudioprocess = (e) => {
         const inputData = e.inputBuffer.getChannelData(0);
-        // Resample to 16kHz if needed
-        const resampledData = this.resample(inputData, sourceSampleRate, this.micSampleRate);
-        const pcm16 = this.float32ToInt16(resampledData);
+        const pcm16 = this.float32ToInt16(inputData);
         const base64 = this.arrayBufferToBase64(pcm16.buffer);
         onAudioData(base64);
       };
     } catch (error: any) {
       this.stopMic();
-      console.error("Mic error details:", error.name, error.message);
       if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
         throw new Error("No microphone found. Please plug in a mic or check your settings.");
       } else if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
@@ -58,17 +52,6 @@ export class AudioStreamer {
         throw new Error(`Mic initialization failed: ${error.message}`);
       }
     }
-  }
-
-  private resample(inputData: Float32Array, fromRate: number, toRate: number): Float32Array {
-    if (fromRate === toRate) return inputData;
-    const ratio = fromRate / toRate;
-    const outputLength = Math.round(inputData.length / ratio);
-    const output = new Float32Array(outputLength);
-    for (let i = 0; i < outputLength; i++) {
-      output[i] = inputData[Math.round(i * ratio)] || 0;
-    }
-    return output;
   }
 
   stopMic() {
@@ -128,6 +111,7 @@ export class AudioStreamer {
   stopPlayback() {
     this.playbackQueue = [];
     this.isPlaying = false;
+    // To fully stop immediately, we would need to track active BufferSource nodes
   }
 
   private float32ToInt16(float32Array: Float32Array): Int16Array {
